@@ -1,10 +1,11 @@
 import Stripe from "stripe";
 
-/** CORS multi-origin */
+/** CORS: permite staging y (luego) tu dominio propio */
 const ALLOWED_ORIGINS = [
   "https://hyeoks-site.webflow.io",
-  "https://tudominio.com" // cámbialo cuando tengas dominio
+  "https://tudominio.com" // <-- cámbialo cuando tengas tu dominio final
 ];
+
 function getAllowedOrigin(req) {
   const origin = req.headers.origin;
   return ALLOWED_ORIGINS.includes(origin) ? origin : "https://hyeoks-site.webflow.io";
@@ -27,15 +28,15 @@ export default async function handler(req, res) {
       currency = "USD",
       success_url = "https://hyeoks-site.webflow.io/success",
       cancel_url  = "https://hyeoks-site.webflow.io/cancel",
-      interval = "month",            // para subscription
+      interval = "month",            // solo si mode === "subscription"
       interval_count = 1,
-      twice_monthly = false,         // caso especial (si lo usas)
+      twice_monthly = false,         // caso especial 1st & 15th (si lo usas)
       anchor
     } = req.body || {};
 
     if (!amount || amount < 1) return res.status(400).json({ error: "Invalid amount." });
 
-    // Añadir el session_id al success_url
+    // Añade session_id para que la Success page pueda leer datos
     const success = success_url.includes("?")
       ? `${success_url}&session_id={CHECKOUT_SESSION_ID}`
       : `${success_url}?session_id={CHECKOUT_SESSION_ID}`;
@@ -45,21 +46,15 @@ export default async function handler(req, res) {
       mode,
       success_url: success,
       cancel_url,
-      customer_creation: "always",            // crea/actualiza Customer
-      billing_address_collection: "auto",     // no forzamos dirección
-      phone_number_collection: { enabled: false },
-      // Pedir NOMBRE sin pedir dirección
-      custom_fields: [
-        {
-          key: "full_name",
-          label: { type: "custom", custom: "Full name" },
-          type: "text",
-          text: { required: true }
-        }
-      ],
+
+      // 👉 Pide Name + Address (incluye campo "Name")
+      billing_address_collection: "required",
+
+      // Crea/actualiza Customer asociado (útil para suscripción y recibos)
+      customer_creation: "always",
     };
 
-    // Flujo normal: pago único o suscripción semanal/quincenal/mensual
+    // Pago único o suscripción semanal/quincenal/mensual
     if (mode === "payment" || (mode === "subscription" && !twice_monthly)) {
       const session = await stripe.checkout.sessions.create({
         ...checkoutBase,
@@ -68,21 +63,25 @@ export default async function handler(req, res) {
           price_data: {
             currency,
             unit_amount: amount,
-            product_data: { name: mode === "subscription" ? "Recurring donation" : "One-time donation" },
-            ...(mode === "subscription" ? { recurring: { interval, interval_count } } : {})
+            product_data: {
+              name: mode === "subscription" ? "Recurring donation" : "One-time donation"
+            },
+            ...(mode === "subscription"
+              ? { recurring: { interval, interval_count } }
+              : {})
           }
         }]
       });
       return res.status(200).json({ url: session.url });
     }
 
-    // (Opcional) “1st & 15th”: primera mitad ahora; la segunda se crea en webhook
+    // (Opcional) Caso “1st & 15th”: primera mitad; la segunda se crearía en un webhook
     const half = Math.floor(amount / 2) || amount;
     const session = await stripe.checkout.sessions.create({
       ...checkoutBase,
       mode: "subscription",
       subscription_data: {
-        billing_cycle_anchor: anchor ? Math.floor(new Date(anchor).getTime()/1000) : "now",
+        billing_cycle_anchor: anchor ? Math.floor(new Date(anchor).getTime() / 1000) : "now",
         proration_behavior: "none",
         metadata: { split_plan: "first_half" }
       },
@@ -104,4 +103,3 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: msg });
   }
 }
-

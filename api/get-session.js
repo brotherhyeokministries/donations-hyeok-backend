@@ -27,13 +27,6 @@ export default async function handler(req, res) {
       expand: ["payment_intent", "subscription", "customer"]
     });
 
-    // Extraer full_name de custom_fields
-    let fullName = null;
-    if (Array.isArray(session.custom_fields)) {
-      const f = session.custom_fields.find(f => f.key === "full_name");
-      fullName = f?.text?.value || null;
-    }
-
     const data = {
       id: session.id,
       mode: session.mode,
@@ -42,7 +35,7 @@ export default async function handler(req, res) {
       amount_total: session.amount_total,
       currency: session.currency,
       customer_email: session.customer_details?.email || session.customer_email || null,
-      customer_name: fullName || session.customer_details?.name || null,
+      customer_name: session.customer_details?.name || null,
       subscription_id: typeof session.subscription === "object" ? session.subscription.id : session.subscription || null,
       payment_intent_id: typeof session.payment_intent === "object" ? session.payment_intent.id : session.payment_intent || null
     };
