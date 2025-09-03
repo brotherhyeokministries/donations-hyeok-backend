@@ -1,0 +1,8 @@
+{
+  "name": "donations-backend",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "stripe": "^16.0.0"
+  }
+}
