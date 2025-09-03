@@ -1,19 +1,16 @@
 import Stripe from "stripe";
 
-/** CORS: permite staging y (luego) tu dominio propio */
+/** Allow these origins (add your custom domain when ready) */
 const ALLOWED_ORIGINS = [
   "https://hyeoks-site.webflow.io",
-  "https://tudominio.com" // <-- cámbialo cuando tengas tu dominio final
+  "https://tudominio.com" // replace when you have your domain
 ];
-
-function getAllowedOrigin(req) {
-  const origin = req.headers.origin;
-  return ALLOWED_ORIGINS.includes(origin) ? origin : "https://hyeoks-site.webflow.io";
-}
+const allowOrigin = (req) =>
+  ALLOWED_ORIGINS.includes(req.headers.origin) ? req.headers.origin : "https://hyeoks-site.webflow.io";
 
 export default async function handler(req, res) {
   // CORS
-  res.setHeader("Access-Control-Allow-Origin", getAllowedOrigin(req));
+  res.setHeader("Access-Control-Allow-Origin", allowOrigin(req));
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(204).end();
@@ -23,83 +20,79 @@ export default async function handler(req, res) {
 
   try {
     const {
-      mode = "payment",              // "payment" | "subscription"
-      amount,                        // minor units (USD: 500 = $5.00)
+      mode = "payment",            // "payment" | "subscription"
+      amount,                      // minor units (USD: 500 = $5.00)
       currency = "USD",
-      success_url = "https://hyeoks-site.webflow.io/success",
-      cancel_url  = "https://hyeoks-site.webflow.io/cancel",
-      interval = "month",            // solo si mode === "subscription"
-      interval_count = 1,
-      twice_monthly = false,         // caso especial 1st & 15th (si lo usas)
-      anchor
+      success_url = "https://hyeoks-site.webflow.io/donate/success",
+      cancel_url  = "https://hyeoks-site.webflow.io/donate/cancel",
+      // for subscriptions:
+      interval = "month",          // "week" | "month" | "year"
+      interval_count = 1
     } = req.body || {};
 
     if (!amount || amount < 1) return res.status(400).json({ error: "Invalid amount." });
 
-    // Añade session_id para que la Success page pueda leer datos
+    // Ensure success_url receives the session id
     const success = success_url.includes("?")
       ? `${success_url}&session_id={CHECKOUT_SESSION_ID}`
       : `${success_url}?session_id={CHECKOUT_SESSION_ID}`;
 
-    // Config común de Checkout
-    const checkoutBase = {
+    // Common Checkout config (applies to both modes)
+    const base = {
       mode,
       success_url: success,
       cancel_url,
-
-      // 👉 Pide Name + Address (incluye campo "Name")
-      billing_address_collection: "required",
-
-      // Crea/actualiza Customer asociado (útil para suscripción y recibos)
-      customer_creation: "always",
+      billing_address_collection: "auto", // do NOT force address
+      // Show a "Full name" field in Checkout
+      custom_fields: [
+        {
+          key: "full_name",
+          label: { type: "custom", custom: "Full name" },
+          type: "text",
+          optional: false,
+          text: { minimum_length: 1, maximum_length: 120 }
+        }
+      ]
     };
 
-    // Pago único o suscripción semanal/quincenal/mensual
-    if (mode === "payment" || (mode === "subscription" && !twice_monthly)) {
+    // ---- ONE-TIME ----
+    if (mode === "payment") {
       const session = await stripe.checkout.sessions.create({
-        ...checkoutBase,
-        line_items: [{
-          quantity: 1,
-          price_data: {
-            currency,
-            unit_amount: amount,
-            product_data: {
-              name: mode === "subscription" ? "Recurring donation" : "One-time donation"
-            },
-            ...(mode === "subscription"
-              ? { recurring: { interval, interval_count } }
-              : {})
+        ...base,
+        customer_creation: "always", // allowed only in "payment" mode
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency,
+              unit_amount: amount,
+              product_data: { name: "One-time donation" }
+            }
           }
-        }]
+        ]
       });
       return res.status(200).json({ url: session.url });
     }
 
-    // (Opcional) Caso “1st & 15th”: primera mitad; la segunda se crearía en un webhook
-    const half = Math.floor(amount / 2) || amount;
+    // ---- SUBSCRIPTION ----
     const session = await stripe.checkout.sessions.create({
-      ...checkoutBase,
-      mode: "subscription",
-      subscription_data: {
-        billing_cycle_anchor: anchor ? Math.floor(new Date(anchor).getTime() / 1000) : "now",
-        proration_behavior: "none",
-        metadata: { split_plan: "first_half" }
-      },
-      line_items: [{
-        quantity: 1,
-        price_data: {
-          currency,
-          unit_amount: half,
-          product_data: { name: "Recurring donation (1/2)" },
-          recurring: { interval: "month", interval_count: 1 }
+      ...base,
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency,
+            unit_amount: amount,
+            product_data: { name: "Recurring donation" },
+            recurring: { interval, interval_count } // weekly/biweekly/monthly/yearly from the frontend
+          }
         }
-      }],
-      metadata: { twice_monthly: "true", original_amount: String(amount) }
+      ]
     });
     return res.status(200).json({ url: session.url });
+
   } catch (err) {
     console.error("[Stripe error]", err?.message, err);
-    const msg = err?.raw?.message || err?.message || "Stripe error";
-    return res.status(500).json({ error: msg });
+    return res.status(500).json({ error: err?.raw?.message || err?.message || "Stripe error" });
   }
 }
