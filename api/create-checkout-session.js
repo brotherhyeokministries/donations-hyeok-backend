@@ -1,6 +1,6 @@
 import Stripe from "stripe";
 
-const ALLOWED_ORIGIN = "*"; // para depurar; luego pon: "https://hyeoks-site.webflow.io"
+const ALLOWED_ORIGIN = "https://hyeoks-site.webflow.io"; // para depurar; luego pon: "https://hyeoks-site.webflow.io"
 
 export default async function handler(req, res) {
   // --- CORS ---
