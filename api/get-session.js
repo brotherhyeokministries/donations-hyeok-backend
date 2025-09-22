@@ -25,29 +25,34 @@ export default async function handler(req, res) {
       expand: ["payment_intent", "subscription", "customer"]
     });
 
-    // Try to read custom field "full_name"
+    // Leer custom field "full_name"
     let fullName = null;
     if (Array.isArray(s.custom_fields)) {
       const f = s.custom_fields.find((x) => x.key === "full_name");
       fullName = f?.text?.value || null;
     }
 
-    const data = {
-      id: s.id,
-      mode: s.mode,                         // "payment" | "subscription"
-      status: s.status,                     // "complete"
-      payment_status: s.payment_status,     // "paid"
-      amount_total: s.amount_total,
-      currency: s.currency,
-      customer_email: s.customer_details?.email || s.customer_email || null,
-      customer_name: fullName || s.customer_details?.name || null,
-      subscription_id:
-        typeof s.subscription === "object" ? s.subscription.id : s.subscription || null,
-      payment_intent_id:
-        typeof s.payment_intent === "object" ? s.payment_intent.id : s.payment_intent || null
-    };
-
-    return res.status(200).json({ session: data });
+    return res.status(200).json({
+      session: {
+        id: s.id,
+        mode: s.mode,
+        status: s.status,
+        payment_status: s.payment_status,
+        amount_total: s.amount_total,
+        currency: s.currency,
+        customer_email: s.customer_details?.email || s.customer_email || null,
+        customer_name: fullName || s.customer_details?.name || null,
+        metadata: s.metadata || null,
+        subscription_id: typeof s.subscription === "object" ? s.subscription.id : s.subscription || null,
+        payment_intent_id: typeof s.payment_intent === "object" ? s.payment_intent.id : s.payment_intent || null
+      },
+      payment_intent: s.payment_intent
+        ? { id: s.payment_intent.id, metadata: s.payment_intent.metadata || null }
+        : null,
+      subscription: s.subscription
+        ? { id: s.subscription.id, metadata: s.subscription.metadata || null }
+        : null
+    });
   } catch (err) {
     console.error("[get-session]", err?.message);
     return res.status(500).json({ error: "Failed to retrieve session" });

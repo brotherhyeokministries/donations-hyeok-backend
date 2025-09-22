@@ -25,25 +25,40 @@ export default async function handler(req, res) {
       currency = "USD",
       success_url = "https://hyeoks-site.webflow.io/donate/success",
       cancel_url  = "https://hyeoks-site.webflow.io/donate/cancel",
-      // for subscriptions:
+      // subscriptions:
       interval = "month",          // "week" | "month" | "year"
-      interval_count = 1
+      interval_count = 1,
+      // NEW (desde Webflow):
+      prayer_request = ""
     } = req.body || {};
 
     if (!amount || amount < 1) return res.status(400).json({ error: "Invalid amount." });
 
-    // Ensure success_url receives the session id
+    // Sanitizar y truncar (defensa en profundidad)
+    const cleanPrayer = String(prayer_request || "")
+      .replace(/[\u0000-\u001f\u007f]/g, "") // quitar control chars
+      .trim()
+      .slice(0, 140);
+
+    // success_url con session id
     const success = success_url.includes("?")
       ? `${success_url}&session_id={CHECKOUT_SESSION_ID}`
       : `${success_url}?session_id={CHECKOUT_SESSION_ID}`;
 
-    // Common Checkout config (applies to both modes)
+    // Metadata común
+    const baseMetadata = {
+      source: "webflow",
+      gift_type: mode === "payment" ? "one-time" : "monthly",
+      ...(cleanPrayer ? { prayer_request: cleanPrayer } : {})
+    };
+
+    // Config base de Checkout
     const base = {
       mode,
       success_url: success,
       cancel_url,
-      billing_address_collection: "auto", // do NOT force address
-      // Show a "Full name" field in Checkout
+      billing_address_collection: "auto",
+      // Campo de nombre que ya usabas
       custom_fields: [
         {
           key: "full_name",
@@ -52,14 +67,21 @@ export default async function handler(req, res) {
           optional: false,
           text: { minimum_length: 1, maximum_length: 120 }
         }
-      ]
+      ],
+      // metadata en la Checkout Session (visible en Zapier)
+      metadata: baseMetadata,
+      submit_type: "donate"
+      // Nota: no forzamos payment_method_types para dejar que Stripe muestre
+      // dinámicamente Apple/Google Pay, Link, PayPal, Amazon Pay, Crypto, etc.
+      // según disponibilidad y lo que hayas activado en el Dashboard.
     };
 
-    // ---- ONE-TIME ----
     if (mode === "payment") {
+      // ONE-TIME: metadata también en el PaymentIntent (Zapier suele leer esto)
       const session = await stripe.checkout.sessions.create({
         ...base,
-        customer_creation: "always", // allowed only in "payment" mode
+        customer_creation: "always",
+        payment_intent_data: { metadata: baseMetadata },
         line_items: [
           {
             quantity: 1,
@@ -74,9 +96,10 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: session.url });
     }
 
-    // ---- SUBSCRIPTION ----
+    // SUBSCRIPTION: metadata también en Subscription
     const session = await stripe.checkout.sessions.create({
       ...base,
+      subscription_data: { metadata: baseMetadata },
       line_items: [
         {
           quantity: 1,
@@ -84,7 +107,7 @@ export default async function handler(req, res) {
             currency,
             unit_amount: amount,
             product_data: { name: "Recurring donation" },
-            recurring: { interval, interval_count } // weekly/biweekly/monthly/yearly from the frontend
+            recurring: { interval, interval_count }
           }
         }
       ]
