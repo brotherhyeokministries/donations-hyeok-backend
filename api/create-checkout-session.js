@@ -1,3 +1,4 @@
+// /api/create-checkout-session.js
 import Stripe from "stripe";
 import crypto from "crypto";
 
@@ -42,15 +43,17 @@ export default async function handler(req, res) {
     } = req.body || {};
 
     // --- SERVER-SIDE VALIDATION ---
-    if (!ALLOWED.modes.has(mode)) return res.status(400).json({ error: "Invalid mode" });
+    if (!ALLOWED.modes.has(mode))        return res.status(400).json({ error: "Invalid mode" });
     if (!ALLOWED.currencies.has(currency)) return res.status(400).json({ error: "Invalid currency" });
+    if (!ALLOWED.intervals.has(interval))  return res.status(400).json({ error: "Invalid interval" });
     if (!Number.isInteger(interval_count) || interval_count < 1 || interval_count > 12)
       return res.status(400).json({ error: "Invalid interval_count" });
-    if (!ALLOWED.intervals.has(interval)) return res.status(400).json({ error: "Invalid interval" });
-    if (!amount || amount < 1 || amount > 5_000_00)  // cap $5,000 por defensa
+
+    // SIN TOPE SUPERIOR: aceptar donaciones altas
+    if (!Number.isInteger(amount) || amount < 1)
       return res.status(400).json({ error: "Invalid amount" });
 
-    // Sanitize & cap prayer
+    // Sanitize & cap prayer (140 chars por UX, no afecta montos)
     const cleanPrayer = String(prayer_request || "")
       .replace(/[\u0000-\u001f\u007f]/g, "")
       .trim()
@@ -84,7 +87,7 @@ export default async function handler(req, res) {
       ],
       metadata: baseMetadata,
       submit_type: "donate"
-      // NOTA: no forzamos payment_method_types; Stripe mostrará Apple/Google Pay, Link,
+      // No fijamos payment_method_types; Stripe mostrará Apple/Google Pay, Link,
       // PayPal, Amazon Pay, Crypto, etc., según disponibilidad y Dashboard.
     };
 
