@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import crypto from "crypto";
 
 /** Allow these origins (add your custom domain when ready) */
 const ALLOWED_ORIGINS = [
@@ -8,11 +9,21 @@ const ALLOWED_ORIGINS = [
 const allowOrigin = (req) =>
   ALLOWED_ORIGINS.includes(req.headers.origin) ? req.headers.origin : "https://hyeoks-site.webflow.io";
 
+const SUCCESS_URL = "https://hyeoks-site.webflow.io/donate/success";
+const CANCEL_URL  = "https://hyeoks-site.webflow.io/donate/cancel";
+
+const ALLOWED = {
+  modes: new Set(["payment", "subscription"]),
+  currencies: new Set(["USD"]),
+  intervals: new Set(["week", "month", "year"])
+};
+
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", allowOrigin(req));
+  res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key");
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST")   return res.status(405).json({ error: "Method not allowed" });
 
@@ -23,27 +34,30 @@ export default async function handler(req, res) {
       mode = "payment",            // "payment" | "subscription"
       amount,                      // minor units (USD: 500 = $5.00)
       currency = "USD",
-      success_url = "https://hyeoks-site.webflow.io/donate/success",
-      cancel_url  = "https://hyeoks-site.webflow.io/donate/cancel",
-      // subscriptions:
+      // for subscriptions:
       interval = "month",          // "week" | "month" | "year"
       interval_count = 1,
-      // NEW (desde Webflow):
+      // optional from Webflow UI:
       prayer_request = ""
     } = req.body || {};
 
-    if (!amount || amount < 1) return res.status(400).json({ error: "Invalid amount." });
+    // --- SERVER-SIDE VALIDATION ---
+    if (!ALLOWED.modes.has(mode)) return res.status(400).json({ error: "Invalid mode" });
+    if (!ALLOWED.currencies.has(currency)) return res.status(400).json({ error: "Invalid currency" });
+    if (!Number.isInteger(interval_count) || interval_count < 1 || interval_count > 12)
+      return res.status(400).json({ error: "Invalid interval_count" });
+    if (!ALLOWED.intervals.has(interval)) return res.status(400).json({ error: "Invalid interval" });
+    if (!amount || amount < 1 || amount > 5_000_00)  // cap $5,000 por defensa
+      return res.status(400).json({ error: "Invalid amount" });
 
-    // Sanitizar y truncar (defensa en profundidad)
+    // Sanitize & cap prayer
     const cleanPrayer = String(prayer_request || "")
-      .replace(/[\u0000-\u001f\u007f]/g, "") // quitar control chars
+      .replace(/[\u0000-\u001f\u007f]/g, "")
       .trim()
       .slice(0, 140);
 
-    // success_url con session id
-    const success = success_url.includes("?")
-      ? `${success_url}&session_id={CHECKOUT_SESSION_ID}`
-      : `${success_url}?session_id={CHECKOUT_SESSION_ID}`;
+    // success_url con session id (lado servidor, no confiamos en el cliente)
+    const success = `${SUCCESS_URL}${SUCCESS_URL.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`;
 
     // Metadata común
     const baseMetadata = {
@@ -56,9 +70,9 @@ export default async function handler(req, res) {
     const base = {
       mode,
       success_url: success,
-      cancel_url,
+      cancel_url: CANCEL_URL,
       billing_address_collection: "auto",
-      // Campo de nombre que ya usabas
+      // Campo visible en Checkout (tu "Full name")
       custom_fields: [
         {
           key: "full_name",
@@ -68,16 +82,17 @@ export default async function handler(req, res) {
           text: { minimum_length: 1, maximum_length: 120 }
         }
       ],
-      // metadata en la Checkout Session (visible en Zapier)
       metadata: baseMetadata,
       submit_type: "donate"
-      // Nota: no forzamos payment_method_types para dejar que Stripe muestre
-      // dinámicamente Apple/Google Pay, Link, PayPal, Amazon Pay, Crypto, etc.
-      // según disponibilidad y lo que hayas activado en el Dashboard.
+      // NOTA: no forzamos payment_method_types; Stripe mostrará Apple/Google Pay, Link,
+      // PayPal, Amazon Pay, Crypto, etc., según disponibilidad y Dashboard.
     };
 
+    // Idempotencia
+    const idemKey = req.headers["idempotency-key"] || crypto.randomUUID();
+
+    // ---- ONE-TIME ----
     if (mode === "payment") {
-      // ONE-TIME: metadata también en el PaymentIntent (Zapier suele leer esto)
       const session = await stripe.checkout.sessions.create({
         ...base,
         customer_creation: "always",
@@ -92,11 +107,12 @@ export default async function handler(req, res) {
             }
           }
         ]
-      });
+      }, { idempotencyKey: idemKey });
+
       return res.status(200).json({ url: session.url });
     }
 
-    // SUBSCRIPTION: metadata también en Subscription
+    // ---- SUBSCRIPTION ----
     const session = await stripe.checkout.sessions.create({
       ...base,
       subscription_data: { metadata: baseMetadata },
@@ -111,11 +127,11 @@ export default async function handler(req, res) {
           }
         }
       ]
-    });
-    return res.status(200).json({ url: session.url });
+    }, { idempotencyKey: idemKey });
 
+    return res.status(200).json({ url: session.url });
   } catch (err) {
-    console.error("[Stripe error]", err?.message, err);
-    return res.status(500).json({ error: err?.raw?.message || err?.message || "Stripe error" });
+    console.error("[Stripe error]", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 }

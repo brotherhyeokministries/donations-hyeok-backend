@@ -10,6 +10,7 @@ const allowOrigin = (req) =>
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", allowOrigin(req));
+  res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(204).end();
@@ -25,7 +26,6 @@ export default async function handler(req, res) {
       expand: ["payment_intent", "subscription", "customer"]
     });
 
-    // Leer custom field "full_name"
     let fullName = null;
     if (Array.isArray(s.custom_fields)) {
       const f = s.custom_fields.find((x) => x.key === "full_name");
@@ -42,16 +42,9 @@ export default async function handler(req, res) {
         currency: s.currency,
         customer_email: s.customer_details?.email || s.customer_email || null,
         customer_name: fullName || s.customer_details?.name || null,
-        metadata: s.metadata || null,
         subscription_id: typeof s.subscription === "object" ? s.subscription.id : s.subscription || null,
         payment_intent_id: typeof s.payment_intent === "object" ? s.payment_intent.id : s.payment_intent || null
-      },
-      payment_intent: s.payment_intent
-        ? { id: s.payment_intent.id, metadata: s.payment_intent.metadata || null }
-        : null,
-      subscription: s.subscription
-        ? { id: s.subscription.id, metadata: s.subscription.metadata || null }
-        : null
+      }
     });
   } catch (err) {
     console.error("[get-session]", err?.message);
