@@ -11,7 +11,7 @@ const allowOrigin = (req) =>
   ALLOWED_ORIGINS.includes(req.headers.origin) ? req.headers.origin : "https://hyeoks-site.webflow.io";
 
 /** Locales válidos como primer segmento de la ruta */
-const ALLOWED_LOCALES = new Set(["kr", "ja", "es", "pt-br"]);
+const ALLOWED_LOCALES = new Set(["en-us", "kr", "ja", "es", "pt-br"]);
 
 /** Paths base (sin locale) */
 const SUCCESS_PATH = "/donate/success";
