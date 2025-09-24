@@ -77,7 +77,8 @@ export default async function handler(req, res) {
       interval_count = 1,
       // optional from Webflow UI:
       prayer_request = "",
-      locale: locale_hint
+      locale: locale_hint,
+      public_consent
     } = req.body || {};
 
     // --- SERVER-SIDE VALIDATION ---
@@ -109,6 +110,7 @@ export default async function handler(req, res) {
     const baseMetadata = {
       source: "webflow",
       gift_type: mode === "payment" ? "one-time" : "monthly",
+      ...(String(public_consent).toLowerCase() === "true" ? { public_consent: "true" } : {}),
       ...(cleanPrayer ? { prayer_request: cleanPrayer } : {})
     };
 
