@@ -110,7 +110,7 @@ export default async function handler(req, res) {
     const baseMetadata = {
       source: "webflow",
       gift_type: mode === "payment" ? "one-time" : "monthly",
-      ...(String(public_consent).toLowerCase() === "true" ? { public_consent: "true" } : {}),
+      public_consent: "true",
       ...(cleanPrayer ? { prayer_request: cleanPrayer } : {})
     };
 
