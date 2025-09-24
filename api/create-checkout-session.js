@@ -10,14 +10,51 @@ const ALLOWED_ORIGINS = [
 const allowOrigin = (req) =>
   ALLOWED_ORIGINS.includes(req.headers.origin) ? req.headers.origin : "https://hyeoks-site.webflow.io";
 
-const SUCCESS_URL = "https://hyeoks-site.webflow.io/donate/success";
-const CANCEL_URL  = "https://hyeoks-site.webflow.io/donate/cancel";
+/** Locales válidos como primer segmento de la ruta */
+const ALLOWED_LOCALES = new Set(["kr", "ja", "es", "pt-br"]);
 
+/** Paths base (sin locale) */
+const SUCCESS_PATH = "/donate/success";
+const CANCEL_PATH  = "/payment";
+
+/** Config permitida */
 const ALLOWED = {
   modes: new Set(["payment", "subscription"]),
-  currencies: new Set(["USD"]),
+  currencies: new Set(["USD"]),          // si en el futuro habilitas otras, añádelas aquí
   intervals: new Set(["week", "month", "year"])
 };
+
+/** Detecta locale a partir del Referer (primer segmento de la ruta) */
+function detectLocale(req) {
+  try {
+    const ref = req.headers.referer || req.headers.referrer;
+    if (!ref) return null;
+    const u = new URL(ref);
+    // u.pathname p.ej.: "/kr/donate"  -> ["", "kr", "donate"]
+    const segments = u.pathname.split("/").filter(Boolean);
+    if (!segments.length) return null;
+    const candidate = segments[0].toLowerCase();
+    return ALLOWED_LOCALES.has(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Construye URL segura: origin + (locale? `/${locale}` : "") + path */
+function buildUrl(origin, localeOrNull, path) {
+  const base = new URL(origin);
+  const prefix = localeOrNull ? `/${localeOrNull}` : "";
+  // Asegura una sola barra
+  base.pathname = `${prefix}${path}`.replace(/\/{2,}/g, "/");
+  return base.toString();
+}
+
+/** Agrega el query param CHECKOUT_SESSION_ID a la success url */
+function addSessionIdParam(urlStr) {
+  const u = new URL(urlStr);
+  u.searchParams.set("session_id", "{CHECKOUT_SESSION_ID}");
+  return u.toString();
+}
 
 export default async function handler(req, res) {
   // CORS
@@ -43,24 +80,27 @@ export default async function handler(req, res) {
     } = req.body || {};
 
     // --- SERVER-SIDE VALIDATION ---
-    if (!ALLOWED.modes.has(mode))        return res.status(400).json({ error: "Invalid mode" });
-    if (!ALLOWED.currencies.has(currency)) return res.status(400).json({ error: "Invalid currency" });
-    if (!ALLOWED.intervals.has(interval))  return res.status(400).json({ error: "Invalid interval" });
+    if (!ALLOWED.modes.has(mode))           return res.status(400).json({ error: "Invalid mode" });
+    if (!ALLOWED.currencies.has(currency))  return res.status(400).json({ error: "Invalid currency" });
+    if (!ALLOWED.intervals.has(interval))   return res.status(400).json({ error: "Invalid interval" });
     if (!Number.isInteger(interval_count) || interval_count < 1 || interval_count > 12)
       return res.status(400).json({ error: "Invalid interval_count" });
 
-    // SIN TOPE SUPERIOR: aceptar donaciones altas
+    // Sin tope superior: aceptar donaciones altas
     if (!Number.isInteger(amount) || amount < 1)
       return res.status(400).json({ error: "Invalid amount" });
 
-    // Sanitize & cap prayer (140 chars por UX, no afecta montos)
+    // Sanitizar prayer (máx 140 chars por UX)
     const cleanPrayer = String(prayer_request || "")
       .replace(/[\u0000-\u001f\u007f]/g, "")
       .trim()
       .slice(0, 140);
 
-    // success_url con session id (lado servidor, no confiamos en el cliente)
-    const success = `${SUCCESS_URL}${SUCCESS_URL.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`;
+    // === Locale-aware success/cancel (no confiamos en el cliente) ===
+    const origin = allowOrigin(req);
+    const locale = detectLocale(req); // p.ej. "kr" | "ja" | "es" | "pt-br" | null
+    const successUrl = addSessionIdParam(buildUrl(origin, locale, SUCCESS_PATH));
+    const cancelUrl  = buildUrl(origin, locale, CANCEL_PATH);
 
     // Metadata común
     const baseMetadata = {
@@ -72,10 +112,9 @@ export default async function handler(req, res) {
     // Config base de Checkout
     const base = {
       mode,
-      success_url: success,
-      cancel_url: CANCEL_URL,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
       billing_address_collection: "auto",
-      // Campo visible en Checkout (tu "Full name")
       custom_fields: [
         {
           key: "full_name",
@@ -137,4 +176,4 @@ export default async function handler(req, res) {
     console.error("[Stripe error]", err);
     return res.status(500).json({ error: "Internal server error" });
   }
-}// test deploy
+}
