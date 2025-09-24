@@ -76,7 +76,8 @@ export default async function handler(req, res) {
       interval = "month",          // "week" | "month" | "year"
       interval_count = 1,
       // optional from Webflow UI:
-      prayer_request = ""
+      prayer_request = "",
+      locale: locale_hint
     } = req.body || {};
 
     // --- SERVER-SIDE VALIDATION ---
@@ -98,7 +99,9 @@ export default async function handler(req, res) {
 
     // === Locale-aware success/cancel (no confiamos en el cliente) ===
     const origin = allowOrigin(req);
-    const locale = detectLocale(req); // p.ej. "kr" | "ja" | "es" | "pt-br" | null
+    // Prefer a validated client-provided locale hint; fallback to Referer
+    const hinted = (typeof locale_hint === "string" ? locale_hint.toLowerCase() : null);
+    const locale = hinted && ALLOWED_LOCALES.has(hinted) ? hinted : detectLocale(req);
     const successUrl = addSessionIdParam(buildUrl(origin, locale, SUCCESS_PATH));
     const cancelUrl  = buildUrl(origin, locale, CANCEL_PATH);
 
