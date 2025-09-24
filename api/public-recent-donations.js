@@ -1,5 +1,35 @@
 // /api/public-recent-donations.js
 import Stripe from "stripe";
+// ==== Demo-friendly email exclude list ======================================
+// Set to true to hide specific donors by email (below). 
+// For launch, set false or comment out this whole section.
+const ENABLE_EMAIL_EXCLUDE = true;
+
+// Hardcoded emails to exclude in demos
+const DEMO_EXCLUDE_EMAILS = [
+  "hello@jedicreate.com",
+  "otro@dominio.com"
+];
+
+// ==== Helper ================================================================
+function parseCsvSet(v) {
+  if (!v || typeof v !== "string") return new Set();
+  return new Set(
+    v.split(",")
+      .map(s => s.trim())
+      .filter(Boolean)
+      .map(s => s.toLowerCase())
+  );
+}
+
+// ENV-based list (for production, from Vercel env var)
+const ENV_EXCLUDE_EMAILS = parseCsvSet(process.env.EXCLUDE_DONOR_EMAILS);
+
+// Combine ENV + DEMO (if toggle enabled)
+const EXCLUDE_EMAILS = new Set([
+  ...ENV_EXCLUDE_EMAILS,
+  ...(ENABLE_EMAIL_EXCLUDE ? DEMO_EXCLUDE_EMAILS.map(e => e.toLowerCase()) : [])
+]);
 
 /** Dominios que pueden leer este feed (ajusta con tu dominio propio cuando lo tengas) */
 const ALLOWED_ORIGINS = [
@@ -55,6 +85,12 @@ export default async function handler(req, res) {
     // 2) Filtrar solo pagadas y con consentimiento público en metadata
     const items = (sessions?.data || [])
       .filter(s => s.payment_status === "paid")
+      .filter(s => {
+        if (EXCLUDE_EMAILS.size === 0) return true;
+        const email = (s.customer_details?.email || "").toLowerCase();
+        if (email && EXCLUDE_EMAILS.has(email)) return false;
+        return true;
+      })
       .filter(s => {
         if (SHOW_ALL_FOR_TEST) return true; // para pruebas: muestra todo
         const consent = (s.metadata && s.metadata.public_consent) || "";
