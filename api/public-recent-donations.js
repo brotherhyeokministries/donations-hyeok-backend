@@ -3,7 +3,7 @@ import Stripe from "stripe";
 // ==== Demo-friendly email exclude list ======================================
 // Set to true to hide specific donors by email (below). 
 // For launch, set false or comment out this whole section.
-const ENABLE_EMAIL_EXCLUDE = true;
+const ENABLE_EMAIL_EXCLUDE = false;
 
 // Hardcoded emails to exclude in demos
 const DEMO_EXCLUDE_EMAILS = [
