@@ -34,20 +34,16 @@ function cors(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
+/**
+ * Change #1: show only FIRST name, with a nicer fallback from email local-part.
+ */
 function displayName(name, email) {
-  const n = (name || "").trim();
-  if (n) return n;
-  if (email) {
-    const local = email.split("@")[0];
-    const pretty = local
-      .replace(/[._-]+/g, " ")
-      .split(" ")
-      .filter(Boolean)
-      .map(s => s.charAt(0).toUpperCase() + s.slice(1))
-      .join(" ");
-    return pretty || "Someone";
-  }
-  return "Someone";
+  // Prefer explicit name; else derive from email local-part
+  const raw = (name && String(name).trim()) || (email ? String(email).trim().split("@")[0] : "");
+  if (!raw) return "Someone";
+  // Normalize separators and take only the first token
+  const first = raw.replace(/[._-]+/g, " ").trim().split(/\s+/)[0] || "";
+  return first ? first.charAt(0).toUpperCase() + first.slice(1) : "Someone";
 }
 
 function fmt(amountMinor, currency = "USD") {
@@ -139,9 +135,22 @@ export default async function handler(req, res) {
       }
     }
 
-    // Ordenar por fecha y recortar a 'limit'
+    // Ordenar por fecha
     items.sort((a, b) => b.ts - a.ts);
-    const out = items.slice(0, limit);
+
+    /**
+     * Change #2: extra de-dup at the end (just in case)
+     * Keyed by lowercased name + text + ts to collapse near-duplicates.
+     */
+    const _seen = new Set();
+    const out = [];
+    for (const it of items) {
+      const k = `${(it.name || "").toLowerCase()}|${it.text}|${it.ts}`;
+      if (_seen.has(k)) continue;
+      _seen.add(k);
+      out.push(it);
+      if (out.length >= limit) break;
+    }
 
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({ items: out });
