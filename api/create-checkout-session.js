@@ -5,7 +5,8 @@ import crypto from "crypto";
 /** Allow these origins (add your custom domain when ready) */
 const ALLOWED_ORIGINS = [
   "https://hyeoks-site.webflow.io",
-  "https://tudominio.com" // replace when you have your domain
+  "https://brotherhyeok.com" // replace when you have your domain
+
 ];
 const allowOrigin = (req) =>
   ALLOWED_ORIGINS.includes(req.headers.origin) ? req.headers.origin : "https://hyeoks-site.webflow.io";

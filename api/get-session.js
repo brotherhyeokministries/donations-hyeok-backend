@@ -2,7 +2,8 @@ import Stripe from "stripe";
 
 const ALLOWED_ORIGINS = [
   "https://hyeoks-site.webflow.io",
-  "https://tudominio.com"
+  "https://brotherhyeok.com",
+
 ];
 const allowOrigin = (req) =>
   ALLOWED_ORIGINS.includes(req.headers.origin) ? req.headers.origin : "https://hyeoks-site.webflow.io";
