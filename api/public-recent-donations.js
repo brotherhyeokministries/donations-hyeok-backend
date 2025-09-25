@@ -102,13 +102,18 @@ export default async function handler(req, res) {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: STRIPE_API_VERSION });
 
   // Parse & clamp ?limit= (default 10, max 50)
+  let showAll = false;
   let limit = 10;
   try {
     const url = new URL(req.url, `https://${req.headers.host}`);
     const param = parseInt(url.searchParams.get("limit") || "10", 10);
     if (Number.isFinite(param)) limit = Math.max(1, Math.min(param, 50));
+
+    // allow override via query for testing: ?showAll=1
+    const sa = url.searchParams.get("showAll") || url.searchParams.get("show_all");
+    showAll = sa === "1" || sa === "true";
   } catch {
-    // ignore; keep default
+    // ignore; keep defaults
   }
 
   try {
@@ -128,8 +133,8 @@ export default async function handler(req, res) {
         const email = s.customer_details?.email || "";
         if (isExcludedEmail(email)) continue;
 
-        if (!SHOW_ALL_FOR_TEST) {
-          const consent = String(s.metadata?.public_consent || "").toLowerCase();
+        const consent = String(s.metadata?.public_consent || "").toLowerCase();
+        if (!(SHOW_ALL_FOR_TEST || showAll)) {
           if (consent !== "true") continue;
         }
 
@@ -162,6 +167,8 @@ export default async function handler(req, res) {
 
     // 4) Small cache (CDN + browser). Adjust as you like.
     res.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=60");
+    res.setHeader("X-Debug-Sessions", String((sessionsRes.data || []).length));
+    res.setHeader("X-Debug-Items", String(out.length));
     return res.status(200).json({ items: out });
   } catch (err) {
     console.error("[public-recent-donations] error:", err);
