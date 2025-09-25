@@ -2,6 +2,38 @@
 import Stripe from "stripe";
 import crypto from "crypto";
 
+// Helpers to format/derive display info & exclusions
+const EXCLUDE_EMAILS = (process.env.EXCLUDE_EMAILS || "")
+  .split(",")
+  .map(s => s.trim().toLowerCase())
+  .filter(Boolean);
+
+function isExcludedEmail(email) {
+  if (!email) return false;
+  return EXCLUDE_EMAILS.includes(String(email).toLowerCase());
+}
+
+function displayNameFrom(details) {
+  const name = details?.name?.trim();
+  if (name) return name;
+  const email = details?.email || "";
+  const local = email.split("@")[0];
+  return local ? local : "Someone";
+}
+
+function formatAmount(minor, currency) {
+  if (typeof minor !== 'number') return null;
+  const zeroDec = new Set(["JPY","KRW","VND","CLP","XOF","XAF","KMF","DJF","GNF","PYG","RWF","UGX","VUV"]);
+  const code = (currency || "").toUpperCase();
+  const n = zeroDec.has(code) ? minor : minor / 100;
+  return { code, value: n };
+}
+
+function zeroPad(v){
+  try{ return (Math.round(v * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  catch{ return String(v); }
+}
+
 /**
  * ENV requeridas en Vercel (Settings → Environment Variables)
  * - STRIPE_SECRET_KEY       = sk_live_… o sk_test_…
@@ -68,6 +100,12 @@ export default async function handler(req, res) {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
+      // Optional: skip internal/test emails
+      if (isExcludedEmail(session.customer_details?.email)) {
+        console.log("[stripe-webhook] skipped (excluded email)", session.customer_details?.email);
+        return res.status(200).json({ received: true, skipped: "excluded_email" });
+      }
+
       // Datos comunes
       const payload = {
         event_type: event.type,
@@ -77,6 +115,7 @@ export default async function handler(req, res) {
         is_subscription: session.mode === "subscription",
         amount_total: session.amount_total, // minor units
         currency: (session.currency || "").toUpperCase(),
+        display_name: displayNameFrom(session.customer_details),
         // PII minimizada:
         customer_email_hash: sha256Hex(session.customer_details?.email || ""),
         customer_name_initials: (session.customer_details?.name || "")
@@ -88,6 +127,16 @@ export default async function handler(req, res) {
         country: session.customer_details?.address?.country || session.customer_details?.address?.country_code || null,
         // metadata propia (desde tu create-checkout-session)
         prayer_request: session.metadata?.prayer_request || "",
+        // human text helpers for downstream automations (Zapier, etc.)
+        display_text: (() => {
+          const amt = formatAmount(session.amount_total, session.currency);
+          if (!amt) return null;
+          const isSub = session.mode === 'subscription';
+          const symbolMap = { USD: '$', EUR: '€', GBP: '£', JPY: '¥', KRW: '₩' };
+          const sym = symbolMap[amt.code] || '';
+          const num = zeroPad(amt.value);
+          return isSub ? `became a Partner (${sym}${num}/mo)` : `just gave ${sym}${num}`;
+        })(),
       };
 
       console.log("[stripe-webhook] checkout.session.completed", {
@@ -99,6 +148,7 @@ export default async function handler(req, res) {
 
       // Reenvío opcional a Zapier con firma propia
       if (process.env.ZAPIER_HOOK_URL) {
+        payload.event_id = event.id;
         const bodyString = JSON.stringify(payload);
         const headers = { "Content-Type": "application/json" };
         const signature = signForward(bodyString);
@@ -120,6 +170,11 @@ export default async function handler(req, res) {
     }
 
     if (event.type === "invoice.paid") {
+      if (String(process.env.FORWARD_INVOICE_PAID || 'on').toLowerCase() === 'off') {
+        console.log('[stripe-webhook] invoice.paid forwarding disabled via FORWARD_INVOICE_PAID=off');
+        return res.status(200).json({ received: true, skipped: 'invoice_forward_off' });
+      }
+
       const invoice = event.data.object;
       const payload = {
         event_type: event.type,
@@ -138,6 +193,7 @@ export default async function handler(req, res) {
       });
 
       if (process.env.ZAPIER_HOOK_URL) {
+        payload.event_id = event.id;
         const bodyString = JSON.stringify(payload);
         const headers = { "Content-Type": "application/json" };
         const signature = signForward(bodyString);
