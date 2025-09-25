@@ -5,17 +5,28 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2023-10-16",
 });
 
-// Dominios permitidos para el widget (ajusta si tienes más)
+// ==== Config ====
 const ALLOWED_ORIGINS = [
   "https://hyeoks-site.webflow.io",
-  "https://www.hyeok.org",              // si lo usas
+  // agrega tu dominio prod si aplica
+  "https://www.brotherhyeok.org",
+  "https://brotherhyeok.org",
 ];
 
-function cors(res, origin) {
-  if (ALLOWED_ORIGINS.includes(origin || "")) {
+const EXCLUDE_EMAILS = (process.env.EXCLUDE_EMAILS || "")
+  .split(",")
+  .map(s => s.trim().toLowerCase())
+  .filter(Boolean);
+
+const ZERO_DEC = new Set(["BIF","CLP","DJF","GNF","JPY","KMF","KRW","MGA","PYG","RWF","UGX","VND","VUV","XAF","XOF","XPF"]);
+
+function cors(req, res) {
+  const origin = req.headers.origin || "";
+  if (ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   } else {
-    // si quieres abrirlo para cualquiera, cambia a "*"
+    // si prefieres abierto para este feed público:
+    // res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Origin", "https://hyeoks-site.webflow.io");
   }
   res.setHeader("Vary", "Origin");
@@ -23,125 +34,119 @@ function cors(res, origin) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-const ZERO_DEC = new Set(["JPY","KRW","VND","CLP","XOF","XAF","KMF","DJF","GNF","PYG","RWF","UGX","VUV"]);
-function fmt(amount, currency="USD") {
-  const iso = currency.toUpperCase();
-  const value = ZERO_DEC.has(iso) ? amount : amount / 100;
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: iso,
-    maximumFractionDigits: ZERO_DEC.has(iso) ? 0 : 2,
-  }).format(value);
+function displayName(name, email) {
+  const n = (name || "").trim();
+  if (n) return n;
+  if (email) {
+    const local = email.split("@")[0];
+    const pretty = local
+      .replace(/[._-]+/g, " ")
+      .split(" ")
+      .filter(Boolean)
+      .map(s => s.charAt(0).toUpperCase() + s.slice(1))
+      .join(" ");
+    return pretty || "Someone";
+  }
+  return "Someone";
 }
 
-const EXCLUDED_EMAILS = [
-  // añade/quitá los tuyos; en minúsculas
-  //"jedidiah.interaction@gmail.com",
-  //"hello@jedicreate.com",
-];
+function fmt(amountMinor, currency = "USD") {
+  const c = currency.toUpperCase();
+  const val = ZERO_DEC.has(c) ? amountMinor : amountMinor / 100;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: c,
+    maximumFractionDigits: ZERO_DEC.has(c) ? 0 : 2,
+  }).format(val);
+}
+
+function isExcluded(email) {
+  return email && EXCLUDE_EMAILS.includes(String(email).toLowerCase());
+}
 
 export default async function handler(req, res) {
-  cors(res, req.headers.origin);
+  cors(req, res);
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
-  if (req.method === "OPTIONS") {
-    res.status(204).end();
-    return;
-  }
-  if (req.method !== "GET") {
-    res.status(405).json({ error: "Method not allowed" });
-    return;
-  }
-
-  const limit = Number.parseInt(req.query.limit, 10) || 10;
+  const limit = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 10));
 
   try {
-    // Traemos eventos recientes y construimos una lista de donaciones
-    // (puedes subir el límite si necesitas más profundidad)
-    const evts = await stripe.events.list({ limit: 50 });
+    // Traemos suficientes eventos recientes para componer 10 limpios
+    // (sube el list limit si alguna vez te quedan pocos)
+    const events = await stripe.events.list({
+      limit: 100,
+      // Nota: podrías usar 'types' para filtrar en la API, pero aquí filtramos abajo.
+    });
 
+    const seenKeys = new Set();  // dedupe por payment_intent/session.id
     const items = [];
-    const seen = new Set(); // para intentar dedupe básico
 
-    for (const e of evts.data) {
-      const t = e.type;
-      const o = e.data?.object ?? {};
+    for (const ev of events.data) {
+      try {
+        if (items.length >= limit) break;
 
-      // Preferimos checkout.session.completed porque trae name/email limpios
-      if (t === "checkout.session.completed") {
-        const name = o.customer_details?.name || o.customer?.name || "Someone";
-        const email = (o.customer_details?.email || "").toLowerCase();
-        if (EXCLUDED_EMAILS.includes(email)) continue;
+        if (ev.type === "checkout.session.completed") {
+          const s = ev.data.object;
 
-        const isSub =
-          o.mode === "subscription" ||
-          !!o.subscription ||
-          o.payment_status === "paid" && o.total_details?.breakdown?.recurring;
+          const email = s.customer_details?.email || "";
+          if (isExcluded(email)) continue;
 
-        const amount = o.amount_total ?? o.amount_subtotal ?? 0;
-        const currency = o.currency || "usd";
+          // Clave única: payment_intent (si existe) o session id
+          const key = s.payment_intent || s.id;
+          if (!key || seenKeys.has(key)) continue;
+          seenKeys.add(key);
 
-        const text = isSub
-          ? `${name} became a Partner (${fmt(amount, currency)}/mo)`
-          : `${name} just gave ${fmt(amount, currency)}`;
+          const name = displayName(s.customer_details?.name, email);
+          const amountMinor = s.amount_total ?? s.amount_subtotal ?? 0;
+          const currency = s.currency || "usd";
 
-        // Dedupe por payment_intent o session id
-        const key = o.payment_intent || o.id;
-        if (seen.has(key)) continue;
-        seen.add(key);
+          const text = s.mode === "subscription"
+            ? `${name} became a Partner (${fmt(amountMinor, currency)}/mo)`
+            : `${name} just gave ${fmt(amountMinor, currency)}`;
 
-        items.push({ name, text, ts: e.created });
-        continue;
-      }
+          items.push({ name, text, ts: ev.created });
+          continue;
+        }
 
-      // Fallback: payment_intent.succeeded (por si hay casos sin Checkout)
-      if (t === "payment_intent.succeeded") {
-        const pi = o;
-        const email = (pi.charges?.data?.[0]?.billing_details?.email || "").toLowerCase();
-        if (EXCLUDED_EMAILS.includes(email)) continue;
+        // Opcional: si quieres que la PRIMERA cuota de suscripción cuente
+        // aunque falte el checkout (algunos flujos), permitimos invoice.paid solo
+        // cuando billing_reason = subscription_create:
+        if (ev.type === "invoice.paid") {
+          const inv = ev.data.object;
+          if (inv.billing_reason !== "subscription_create") continue;
 
-        const name =
-          pi.charges?.data?.[0]?.billing_details?.name ||
-          pi.customer?.name ||
-          "Someone";
+          const email = inv.customer_email || "";
+          if (isExcluded(email)) continue;
 
-        const amount = pi.amount_received ?? pi.amount ?? 0;
-        const currency = pi.currency || "usd";
-        const key = pi.id;
-        if (seen.has(key)) continue;
-        seen.add(key);
+          const key = inv.payment_intent || inv.id;
+          if (!key || seenKeys.has(key)) continue;
+          seenKeys.add(key);
 
-        items.push({
-          name,
-          text: `${name} just gave ${fmt(amount, currency)}`,
-          ts: e.created,
-        });
-        continue;
-      }
+          const name = displayName(inv.customer_name, email);
+          const amountMinor = inv.amount_paid ?? inv.total ?? 0;
+          const currency = inv.currency || "usd";
 
-      // También puedes admitir `invoice.paid` si quieres mostrar renovaciones
-      if (t === "invoice.paid" && o.billing_reason === "subscription_create") {
-        const subCustomerName = o.customer_name || o.customer_email || "Someone";
-        const amount = o.amount_paid ?? o.total ?? 0;
-        const currency = o.currency || "usd";
-        const key = o.id;
-        if (seen.has(key)) continue;
-        seen.add(key);
+          const text = `${name} became a Partner (${fmt(amountMinor, currency)}/mo)`;
+          items.push({ name, text, ts: ev.created });
+          continue;
+        }
 
-        items.push({
-          name: subCustomerName,
-          text: `${subCustomerName} became a Partner (${fmt(amount, currency)}/mo)`,
-          ts: e.created,
-        });
+        // Ignoramos payment_intent.succeeded / charge.succeeded para no duplicar
+      } catch {
+        // continúa si algún evento viene raro
         continue;
       }
     }
 
-    // Ordenamos por más recientes y limitamos
+    // Ordenar por fecha y recortar a 'limit'
     items.sort((a, b) => b.ts - a.ts);
+    const out = items.slice(0, limit);
+
     res.setHeader("Cache-Control", "no-store");
-    res.status(200).json({ items: items.slice(0, limit) });
+    return res.status(200).json({ items: out });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to load donations" });
+    console.error("public-recent-donations error:", err);
+    return res.status(500).json({ items: [] });
   }
 }
