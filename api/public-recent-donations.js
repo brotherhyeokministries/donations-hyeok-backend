@@ -36,8 +36,8 @@ function fmt(amount, currency="USD") {
 
 const EXCLUDED_EMAILS = [
   // añade/quitá los tuyos; en minúsculas
-  "jedidiah.interaction@gmail.com",
-  "hello@jedicreate.com",
+  //"jedidiah.interaction@gmail.com",
+  //"hello@jedicreate.com",
 ];
 
 export default async function handler(req, res) {
